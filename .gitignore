@@ -1,0 +1,12 @@
+# Ignore everything by default
+*
+
+# Keep directories traversable so allowed files can be included
+!*/
+
+# Keep Python and Markdown files
+!*.py
+!*.md
+
+# Keep this ignore file
+!.gitignore
