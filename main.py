@@ -127,7 +127,8 @@ ESP32Encoder encoders[NUM_MOTORS];
 #endif
 float targetRPM[NUM_MOTORS]={{0}}, currentRPM[NUM_MOTORS]={{0}}, kp[NUM_MOTORS]={{0.2}}, ki[NUM_MOTORS]={{0.1}}, kd[NUM_MOTORS]={{0.001}}, integral[NUM_MOTORS]={{0}}, previousError[NUM_MOTORS]={{0}};
 long previousCount[NUM_MOTORS]={{0}}; unsigned long previousPID=0, previousSample=0;
-bool encoderStreaming=false; int streamMotor=-1; enum Mode {{ PID_MODE, MANUAL_MODE }}; Mode mode=PID_MODE;
+bool encoderStreaming=false; int streamMotor=-1; bool manualActive=false; int manualMotor=-1; unsigned long manualStopAt=0;
+enum Mode {{ PID_MODE, MANUAL_MODE }}; Mode mode=PID_MODE;
 
 long encoderCount(int motor) {{
 #if defined(ESP32)
@@ -150,14 +151,15 @@ void setMotor(int motor, int value) {{ value=constrain(value,-PWM_LIMIT,PWM_LIMI
 void sampleRPM() {{ unsigned long now=millis(); if(now-previousSample<100)return; float dt=(now-previousSample)/1000.0f; if(!previousSample){{previousSample=now;return;}} for(int i=0;i<NUM_MOTORS;i++){{long count=encoderCount(i); currentRPM[i]=(count-previousCount[i])*60.0f/(encoderTicks[i]*dt); previousCount[i]=count;}} previousSample=now; }}
 void updatePID() {{ unsigned long now=millis(); if(now-previousPID<PID_INTERVAL)return; float dt=(now-previousPID)/1000.0f; previousPID=now; if(mode!=PID_MODE)return; for(int i=0;i<NUM_MOTORS;i++){{float error=targetRPM[i]-currentRPM[i]; integral[i]=constrain(integral[i]+error*dt,-1000,1000); float output=kp[i]*error+ki[i]*integral[i]+kd[i]*(error-previousError[i])/dt; previousError[i]=error; setMotor(i,(int)output);}} }}
 void processCommand(String command) {{
-  command.trim(); command.toLowerCase(); char buffer[120]; command.toCharArray(buffer,sizeof(buffer)); char name[16], argument[16]; int motor; float first,second,third;
+    command.trim(); command.toLowerCase(); char buffer[120]; command.toCharArray(buffer,sizeof(buffer)); char name[16], argument[16]; int motor, pwm; unsigned long duration; float first,second,third;
   if(sscanf(buffer,"reset %15s",argument)==1) {{ if(!strcmp(argument,"all")){{for(int i=0;i<NUM_MOTORS;i++)resetEncoder(i); Serial.println("All encoders reset");}} else {{motor=atoi(argument); if(motor>=1&&motor<=NUM_MOTORS){{resetEncoder(motor-1);Serial.println("Encoder reset");}} else Serial.println("Invalid motor number");}} return; }}
   if(sscanf(buffer,"encoder %d",&motor)==1 && motor>=1 && motor<=NUM_MOTORS){{streamMotor=motor-1;encoderStreaming=true;Serial.println("Encoder streaming started");return;}}
   if(!strcmp(buffer,"stop")){{encoderStreaming=false;streamMotor=-1;Serial.println("Encoder streaming stopped");return;}}
+    if(sscanf(buffer,"set %d %d %lu",&motor,&pwm,&duration)==3){{if(mode!=MANUAL_MODE){{Serial.println("Switch to manual mode first");return;}} if(motor>=1&&motor<=NUM_MOTORS){{if(manualActive)setMotor(manualMotor,0);manualMotor=motor-1;setMotor(manualMotor,pwm);manualStopAt=millis()+duration;manualActive=true;Serial.println("Manual motor command started");}} else Serial.println("Invalid motor number");return;}}
   if(sscanf(buffer,"target %d %f",&motor,&first)==2 && motor>=1 && motor<=NUM_MOTORS){{targetRPM[motor-1]=first;return;}}
   if(sscanf(buffer,"motor %d %f %f %f",&motor,&first,&second,&third)==4 && motor>=1 && motor<=NUM_MOTORS){{int i=motor-1;kp[i]=first;ki[i]=second;kd[i]=third;integral[i]=previousError[i]=0;return;}}
-  if(!strcmp(buffer,"mode pid")){{mode=PID_MODE;return;}} if(!strcmp(buffer,"mode manual")){{mode=MANUAL_MODE;return;}}
-  if(!strcmp(buffer,"help")){{Serial.println("motor <n> <kp> <ki> <kd> | target <n> <rpm> | encoder <n> | reset <n|all> | stop | mode pid|manual");return;}} Serial.println("Unknown command. Send help.");
+    if(!strcmp(buffer,"mode pid")){{if(manualActive)setMotor(manualMotor,0);manualActive=false;manualMotor=-1;mode=PID_MODE;return;}} if(!strcmp(buffer,"mode manual")){{for(int i=0;i<NUM_MOTORS;i++)setMotor(i,0);manualActive=false;manualMotor=-1;mode=MANUAL_MODE;return;}}
+    if(!strcmp(buffer,"help")){{Serial.println("motor <n> <kp> <ki> <kd> | target <n> <rpm> | set <n> <pwm> <time_ms> | encoder <n> | reset <n|all> | stop | mode pid|manual");return;}} Serial.println("Unknown command. Send help.");
 }}
 void setup() {{ Serial.begin(115200);
 #if defined(ESP32) || defined(TEENSYDUINO) || defined(ARDUINO_ARCH_RP2040)
@@ -168,7 +170,7 @@ void setup() {{ Serial.begin(115200);
     ESP32Encoder::useInternalWeakPullResistors=UP;\n{enc_setup}
 #endif
     for(int i=0;i<NUM_MOTORS;i++)setMotor(i,0); Serial.println("Motor RPM Tuner Ready"); }}
-void loop() {{ while(Serial.available())processCommand(Serial.readStringUntil('\\n')); sampleRPM(); updatePID(); if(encoderStreaming&&streamMotor>=0){{Serial.print("Encoder: ");Serial.println(encoderCount(streamMotor));delay(50);}} }}
+void loop() {{ while(Serial.available())processCommand(Serial.readStringUntil('\\n')); sampleRPM(); updatePID(); if(manualActive&&((long)(millis()-manualStopAt)>=0)){{setMotor(manualMotor,0);manualActive=false;manualMotor=-1;Serial.println("Manual motor stopped");}} if(encoderStreaming&&streamMotor>=0){{Serial.print("Encoder: ");Serial.println(encoderCount(streamMotor));delay(50);}} }}
 '''
 
     def copy_code(self):
