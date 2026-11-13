@@ -103,7 +103,10 @@ class MotorTunerGenerator:
             objects.append(f"Encoder encoder{index}(ENC_A_{index},ENC_B_{index});")
         ticks = ", ".join(str(motor["TICKS"]) for motor in motors)
         enc_setup = "\n".join(f"    encoders[{index}].attachFullQuad(ENC_A_{index}, ENC_B_{index});" for index in range(number))
-        non_esp_counts = "\n".join(f"    return encoder{index}.read();" if index == 0 else f"    if (motor == {index}) return encoder{index}.read();" for index in range(number)) + "\n    return 0;"
+        non_esp_counts = "\n".join(
+            f"    if (motor == {index}) return encoder{index}.read();"
+            for index in range(number)
+        ) + "\n    return 0;"
         return f'''/* Motor RPM Tuner | MCU: {mcu} | Driver: {driver}
    ESP32 uses ESP32Encoder full quadrature. Other boards use Encoder.h.
    PWM uses analogWriteResolution/analogWrite; no PWM frequency is configured. */
@@ -185,6 +188,4 @@ void loop() {{ while(Serial.available())processCommand(Serial.readStringUntil('\
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    MotorTunerGenerator(root)
-    root.mainloop()
+    root = tk.Tk(); MotorTunerGenerator(root); root.mainloop()
