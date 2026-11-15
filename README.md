@@ -28,6 +28,7 @@ A desktop Tkinter application that generates ready-to-upload Arduino C++ code fo
 - Applies per-motor PID control using configurable `Kp`, `Ki`, and `Kd` values.
 - Supports encoder reset and live encoder-count streaming over Serial.
 - Lets you copy generated code to the clipboard or save it directly as an `.ino` file.
+- Lets you save and load complete hardware and motor pinout configurations as human-readable JSON files from the **File** menu.
 
 ## Supported Motor Drivers
 
@@ -209,6 +210,10 @@ The `motor` command updates gains immediately and resets that motor's integral a
 6. Copy the output or save it as an Arduino `.ino` sketch.
 7. Install the required encoder library, compile the sketch, and upload it to the microcontroller.
 8. Use the serial commands to set target RPMs and tune the PID gains.
+
+Use **File > Save Configuration...** to save the current hardware settings and motor pinouts
+as an indented JSON file. Use **File > Load Configuration...** to restore them; loading a
+configuration automatically changes the motor count and driver before restoring its saved fields.
 
 ## Requirements
 

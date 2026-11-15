@@ -1,3 +1,4 @@
+import json
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -17,6 +18,13 @@ class MotorTunerGenerator:
         self.create_ui()
 
     def create_ui(self):
+        menu = tk.Menu(self.root)
+        file_menu = tk.Menu(menu, tearoff=False)
+        file_menu.add_command(label="Save Configuration...", command=self.save_configuration)
+        file_menu.add_command(label="Load Configuration...", command=self.load_configuration)
+        menu.add_cascade(label="File", menu=file_menu)
+        self.root.config(menu=menu)
+
         main = ttk.Frame(self.root, padding=12)
         main.pack(fill="both", expand=True)
         ttk.Label(main, text="MOTOR RPM TUNER", font=("Arial", 20, "bold")).pack(anchor="w", pady=10)
@@ -68,6 +76,94 @@ class MotorTunerGenerator:
                 entry = ttk.Entry(self.hardware_frame, width=8); entry.grid(row=index + 1, column=column, padx=3)
                 entry.insert(0, old[index].get(key, str(default)) if index < len(old) else str(default)); row[key] = entry
             self.motor_fields.append(row)
+
+    def get_configuration(self):
+        return {
+            "format": "motor-rpm-tuner-configuration",
+            "version": 1,
+            "hardware": {
+                "microcontroller": self.mcu.get(),
+                "motor_driver": self.driver.get(),
+                "motor_count": self.count.get(),
+                "pwm_resolution_bits": self.resolution.get(),
+                "pwm_hard_limit_percent": self.pwm_limit.get(),
+                "pid_interval_ms": self.pid_interval.get(),
+            },
+            "motors": [
+                {key: int(entry.get()) for key, entry in row.items()}
+                for row in self.motor_fields
+            ],
+        }
+
+    def save_configuration(self):
+        try:
+            configuration = self.get_configuration()
+        except (ValueError, tk.TclError) as error:
+            messagebox.showerror("Configuration Error", f"Cannot save configuration: {error}")
+            return
+        path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("Motor configuration", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as output:
+                json.dump(configuration, output, indent=2)
+                output.write("\n")
+        except OSError as error:
+            messagebox.showerror("Save Error", f"Could not save configuration:\n{error}")
+
+    def load_configuration(self):
+        path = filedialog.askopenfilename(
+            filetypes=[("Motor configuration", "*.json"), ("All files", "*.*")]
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as configuration_file:
+                configuration = json.load(configuration_file)
+            self.apply_configuration(configuration)
+        except (OSError, json.JSONDecodeError, ValueError, TypeError, KeyError, tk.TclError) as error:
+            messagebox.showerror("Load Error", f"Could not load configuration:\n{error}")
+
+    def apply_configuration(self, configuration):
+        if (
+            not isinstance(configuration, dict)
+            or configuration.get("format") != "motor-rpm-tuner-configuration"
+            or configuration.get("version") != 1
+        ):
+            raise ValueError("This is not a supported motor configuration file.")
+        hardware = configuration.get("hardware")
+        motors = configuration.get("motors")
+        if not isinstance(hardware, dict) or not isinstance(motors, list):
+            raise ValueError("Configuration must contain hardware and motors sections.")
+        if hardware.get("motor_count") != len(motors):
+            raise ValueError("Motor count does not match the saved motor entries.")
+        if not 1 <= hardware["motor_count"] <= 16:
+            raise ValueError("Saved motor count must be between 1 and 16.")
+        if hardware["motor_driver"] not in ["BTN8982", "L298N", "MDD20A", "Generic PWM/DIR"]:
+            raise ValueError("Saved motor driver is not supported.")
+        if hardware["microcontroller"] not in ["ESP32", "Arduino", "Teensy", "Pico"]:
+            raise ValueError("Saved microcontroller is not supported.")
+
+        self.mcu.set(hardware["microcontroller"])
+        self.driver.set(hardware["motor_driver"])
+        self.count.set(hardware["motor_count"])
+        self.resolution.set(hardware["pwm_resolution_bits"])
+        self.pwm_limit.set(hardware["pwm_hard_limit_percent"])
+        self.pid_interval.set(hardware["pid_interval_ms"])
+        self.build_motor_fields()
+        expected_keys = set(self.motor_fields[0]) if self.motor_fields else set()
+        for index, motor in enumerate(motors):
+            if not isinstance(motor, dict) or set(motor) != expected_keys:
+                raise ValueError(f"Motor {index + 1} has invalid pinout fields.")
+            for key, entry in self.motor_fields[index].items():
+                value = motor[key]
+                if not isinstance(value, int) or isinstance(value, bool):
+                    raise ValueError(f"Motor {index + 1} field {key} must be an integer.")
+                entry.delete(0, "end")
+                entry.insert(0, str(value))
 
     def generate(self):
         try:
