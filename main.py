@@ -14,6 +14,10 @@ class MotorTunerGenerator:
         self.resolution = tk.IntVar(value=10)
         self.pwm_limit = tk.DoubleVar(value=90)
         self.pid_interval = tk.IntVar(value=10)
+        self.default_kp = tk.DoubleVar(value=0.2)
+        self.default_ki = tk.DoubleVar(value=0.1)
+        self.default_kd = tk.DoubleVar(value=0.001)
+        self.separate_pid = tk.BooleanVar(value=True)
         self.motor_fields = []
         self.create_ui()
 
@@ -37,6 +41,19 @@ class MotorTunerGenerator:
         self.add_entry(config, "PWM Hard Limit (%)", self.pwm_limit, 4)
         self.add_entry(config, "PID Interval (ms)", self.pid_interval, 5)
         ttk.Button(config, text="Update Motor Configuration", command=self.build_motor_fields).grid(row=6, column=0, columnspan=4, pady=10)
+        pid_config = ttk.LabelFrame(main, text="PID Configuration", padding=10)
+        pid_config.pack(fill="x", pady=5)
+        self.add_entry(pid_config, "Default kP", self.default_kp, 0)
+        self.add_entry(pid_config, "Default kI", self.default_ki, 1)
+        self.add_entry(pid_config, "Default kD", self.default_kd, 2)
+        ttk.Checkbutton(
+            pid_config,
+            text="Use the same PID defaults for all motors (testing)",
+            variable=self.separate_pid,
+        ).grid(row=0, column=4, rowspan=2, sticky="w", padx=12)
+        ttk.Button(pid_config, text="Zero All PID Values", command=self.zero_pid_values).grid(
+            row=2, column=4, sticky="w", padx=12, pady=3
+        )
         self.hardware_frame = ttk.LabelFrame(main, text="Individual Motor Configuration", padding=10)
         self.hardware_frame.pack(fill="x", pady=8)
         self.build_motor_fields()
@@ -77,6 +94,11 @@ class MotorTunerGenerator:
                 entry.insert(0, old[index].get(key, str(default)) if index < len(old) else str(default)); row[key] = entry
             self.motor_fields.append(row)
 
+    def zero_pid_values(self):
+        self.default_kp.set(0)
+        self.default_ki.set(0)
+        self.default_kd.set(0)
+
     def get_configuration(self):
         return {
             "format": "motor-rpm-tuner-configuration",
@@ -88,6 +110,12 @@ class MotorTunerGenerator:
                 "pwm_resolution_bits": self.resolution.get(),
                 "pwm_hard_limit_percent": self.pwm_limit.get(),
                 "pid_interval_ms": self.pid_interval.get(),
+            },
+            "pid": {
+                "default_kp": self.default_kp.get(),
+                "default_ki": self.default_ki.get(),
+                "default_kd": self.default_kd.get(),
+                "separate_gains": self.separate_pid.get(),
             },
             "motors": [
                 {key: int(entry.get()) for key, entry in row.items()}
@@ -135,8 +163,9 @@ class MotorTunerGenerator:
         ):
             raise ValueError("This is not a supported motor configuration file.")
         hardware = configuration.get("hardware")
+        pid = configuration.get("pid", {})
         motors = configuration.get("motors")
-        if not isinstance(hardware, dict) or not isinstance(motors, list):
+        if not isinstance(hardware, dict) or not isinstance(pid, dict) or not isinstance(motors, list):
             raise ValueError("Configuration must contain hardware and motors sections.")
         if hardware.get("motor_count") != len(motors):
             raise ValueError("Motor count does not match the saved motor entries.")
@@ -153,6 +182,19 @@ class MotorTunerGenerator:
         self.resolution.set(hardware["pwm_resolution_bits"])
         self.pwm_limit.set(hardware["pwm_hard_limit_percent"])
         self.pid_interval.set(hardware["pid_interval_ms"])
+        for key, variable in (
+            ("default_kp", self.default_kp),
+            ("default_ki", self.default_ki),
+            ("default_kd", self.default_kd),
+        ):
+            if key in pid:
+                if not isinstance(pid[key], (int, float)) or isinstance(pid[key], bool):
+                    raise ValueError(f"PID field {key} must be a number.")
+                variable.set(pid[key])
+        if "separate_gains" in pid:
+            if not isinstance(pid["separate_gains"], bool):
+                raise ValueError("PID field separate_gains must be a boolean.")
+            self.separate_pid.set(pid["separate_gains"])
         self.build_motor_fields()
         expected_keys = set(self.motor_fields[0]) if self.motor_fields else set()
         for index, motor in enumerate(motors):
@@ -168,17 +210,20 @@ class MotorTunerGenerator:
     def generate(self):
         try:
             count, bits, limit, interval = self.count.get(), self.resolution.get(), self.pwm_limit.get(), self.pid_interval.get()
+            kp, ki, kd = self.default_kp.get(), self.default_ki.get(), self.default_kd.get()
             if not 1 <= count <= 16 or len(self.motor_fields) != count: raise ValueError("Update motor configuration first.")
             if not 1 <= bits <= 16 or not 1 <= limit <= 100 or not 1 <= interval <= 1000: raise ValueError("Check PWM and PID values.")
+            if kp < 0 or ki < 0 or kd < 0: raise ValueError("PID values must be non-negative.")
             if self.mcu.get() == "Arduino" and bits != 8: raise ValueError("Standard Arduino Uno/Nano uses 8-bit analogWrite. Select 8 bits.")
             motors = [{key: int(entry.get()) for key, entry in row.items()} for row in self.motor_fields]
             pin_values = [value for motor in motors for key, value in motor.items() if key != "TICKS"]
             if any(value < 0 for value in pin_values) or len(pin_values) != len(set(pin_values)): raise ValueError("Pins must be non-negative and unique.")
             if any(motor["TICKS"] == 0 for motor in motors): raise ValueError("Ticks per revolution must be positive.")
-            self.output.delete("1.0", "end"); self.output.insert("1.0", self.generate_cpp(motors, bits, limit, interval))
+            self.output.delete("1.0", "end")
+            self.output.insert("1.0", self.generate_cpp(motors, bits, limit, interval, kp, ki, kd))
         except (ValueError, tk.TclError) as error: messagebox.showerror("Configuration Error", str(error))
 
-    def generate_cpp(self, motors, bits, limit, interval):
+    def generate_cpp(self, motors, bits, limit, interval, kp, ki, kd):
         driver, mcu, number = self.driver.get(), self.mcu.get(), len(motors)
         max_pwm, hard_limit = (1 << bits) - 1, int(((1 << bits) - 1) * limit / 100)
         constants, encoder_constants, objects, setup_pins, cases = [], [], [], [], []
@@ -203,6 +248,15 @@ class MotorTunerGenerator:
             f"    if (motor == {index}) return encoder{index}.read();"
             for index in range(number)
         ) + "\n    return 0;"
+        default_kp = ", ".join(f"{kp}f" for _ in range(number))
+        default_ki = ", ".join(f"{ki}f" for _ in range(number))
+        default_kd = ", ".join(f"{kd}f" for _ in range(number))
+        pid_declarations = (
+            f"float kp[NUM_MOTORS] = {{{default_kp}}}, ki[NUM_MOTORS] = {{{default_ki}}}, "
+            f"kd[NUM_MOTORS] = {{{default_kd}}};"
+        )
+        pid_update = "kp[i]*error+ki[i]*integral[i]+kd[i]*(error-previousError[i])/dt"
+        pid_command = "kp[i]=first;ki[i]=second;kd[i]=third;"
         return f'''/* Motor RPM Tuner | MCU: {mcu} | Driver: {driver}
    ESP32 uses ESP32Encoder full quadrature. Other boards use Encoder.h.
    PWM uses analogWriteResolution/analogWrite; no PWM frequency is configured. */
@@ -224,7 +278,8 @@ ESP32Encoder encoders[NUM_MOTORS];
 #else
 {chr(10).join(objects)}
 #endif
-float targetRPM[NUM_MOTORS]={{0}}, currentRPM[NUM_MOTORS]={{0}}, kp[NUM_MOTORS]={{0.2}}, ki[NUM_MOTORS]={{0.1}}, kd[NUM_MOTORS]={{0.001}}, integral[NUM_MOTORS]={{0}}, previousError[NUM_MOTORS]={{0}};
+float targetRPM[NUM_MOTORS]={{0}}, currentRPM[NUM_MOTORS]={{0}}, integral[NUM_MOTORS]={{0}}, previousError[NUM_MOTORS]={{0}};
+{pid_declarations}
 long previousCount[NUM_MOTORS]={{0}}; unsigned long previousPID=0, previousSample=0;
 bool encoderStreaming=false; int streamMotor=-1; enum Mode {{ PID_MODE, MANUAL_MODE }}; Mode mode=PID_MODE;
 int manualPWM[NUM_MOTORS]={{0}}; unsigned long manualEnd[NUM_MOTORS]={{0}};
@@ -248,7 +303,7 @@ void resetEncoder(int motor) {{
 void writePWM(int pin, int value) {{ analogWrite(pin, constrain(value, 0, PWM_LIMIT)); }}
 void setMotor(int motor, int value) {{ value=constrain(value,-PWM_LIMIT,PWM_LIMIT); switch(motor) {{ {chr(10).join(cases)} }} }}
 void sampleRPM() {{ unsigned long now=millis(); if(now-previousSample<100)return; float dt=(now-previousSample)/1000.0f; if(!previousSample){{previousSample=now;return;}} for(int i=0;i<NUM_MOTORS;i++){{long count=encoderCount(i); currentRPM[i]=(count-previousCount[i])*60.0f/(encoderTicks[i]*dt); previousCount[i]=count;}} previousSample=now; }}
-void updatePID() {{ unsigned long now=millis(); if(now-previousPID<PID_INTERVAL)return; float dt=(now-previousPID)/1000.0f; previousPID=now; if(mode!=PID_MODE)return; for(int i=0;i<NUM_MOTORS;i++){{float error=targetRPM[i]-currentRPM[i]; integral[i]=constrain(integral[i]+error*dt,-1000,1000); float output=kp[i]*error+ki[i]*integral[i]+kd[i]*(error-previousError[i])/dt; previousError[i]=error; setMotor(i,(int)output);}} }}
+void updatePID() {{ unsigned long now=millis(); if(now-previousPID<PID_INTERVAL)return; float dt=(now-previousPID)/1000.0f; previousPID=now; if(mode!=PID_MODE)return; for(int i=0;i<NUM_MOTORS;i++){{float error=targetRPM[i]-currentRPM[i]; integral[i]=constrain(integral[i]+error*dt,-1000,1000); float output={pid_update}; previousError[i]=error; setMotor(i,(int)output);}} }}
 void updateManual() {{ for(int i=0;i<NUM_MOTORS;i++){{ if(manualEnd[i] && (long)(millis()-manualEnd[i])>=0){{ setMotor(i,0); manualPWM[i]=0; manualEnd[i]=0; }} }} }}
 void processCommand(String command) {{
   command.trim(); command.toLowerCase(); char buffer[120]; command.toCharArray(buffer,sizeof(buffer)); char name[16], argument[16]; int motor; unsigned long duration; float first,second,third;
@@ -256,7 +311,7 @@ void processCommand(String command) {{
   if(sscanf(buffer,"encoder %d",&motor)==1 && motor>=1 && motor<=NUM_MOTORS){{streamMotor=motor-1;encoderStreaming=true;Serial.println("Encoder streaming started");return;}}
   if(!strcmp(buffer,"stop")){{encoderStreaming=false;streamMotor=-1;Serial.println("Encoder streaming stopped");return;}}
   if(sscanf(buffer,"target %d %f",&motor,&first)==2 && motor>=1 && motor<=NUM_MOTORS){{targetRPM[motor-1]=first;return;}}
-  if(sscanf(buffer,"motor %d %f %f %f",&motor,&first,&second,&third)==4 && motor>=1 && motor<=NUM_MOTORS){{int i=motor-1;kp[i]=first;ki[i]=second;kd[i]=third;integral[i]=previousError[i]=0;return;}}
+  if(sscanf(buffer,"motor %d %f %f %f",&motor,&first,&second,&third)==4 && motor>=1 && motor<=NUM_MOTORS){{int i=motor-1;{pid_command}integral[i]=previousError[i]=0;return;}}
   if(sscanf(buffer,"set %d %f %lu",&motor,&first,&duration)==3 && motor>=1 && motor<=NUM_MOTORS){{ if(mode!=MANUAL_MODE){{Serial.println("Switch to manual mode first");return;}} int i=motor-1; manualPWM[i]=constrain((int)first,-PWM_LIMIT,PWM_LIMIT); manualEnd[i]=millis()+duration; setMotor(i,manualPWM[i]); Serial.println("Manual movement started"); return; }}
   if(!strcmp(buffer,"mode pid")){{mode=PID_MODE;return;}} if(!strcmp(buffer,"mode manual")){{mode=MANUAL_MODE;return;}}
   if(!strcmp(buffer,"help")){{Serial.println("motor <n> <kp> <ki> <kd> | target <n> <rpm> | set <n> <pwm> <time_ms> | encoder <n> | reset <n|all> | stop | mode pid|manual");return;}} Serial.println("Unknown command. Send help.");

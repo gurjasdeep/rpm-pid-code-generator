@@ -25,7 +25,7 @@ A desktop Tkinter application that generates ready-to-upload Arduino C++ code fo
 - Generates a complete Arduino `.ino` sketch for one or more motors.
 - Supports up to 16 independently configured motors.
 - Measures motor speed from quadrature encoders and calculates RPM.
-- Applies per-motor PID control using configurable `Kp`, `Ki`, and `Kd` values.
+- Applies per-motor PID control using configurable `Kp`, `Ki`, and `Kd` values. The generated sketch always supports different gains for different motors.
 - Supports encoder reset and live encoder-count streaming over Serial.
 - Lets you copy generated code to the clipboard or save it directly as an `.ino` file.
 - Lets you save and load complete hardware and motor pinout configurations as human-readable JSON files from the **File** menu.
@@ -65,6 +65,12 @@ The generated sketch selects the ESP32 encoder library when compiling for ESP32 
 - PWM hard limit: 1% to 100%
 - PID update interval: 1 to 1000 ms
 
+### PID configuration
+
+- Default `kP`, `kI`, and `kD` values used in the generated sketch
+- **Use the same PID defaults for all motors (testing)**: the GUI's default fields provide a convenient common starting point; the generated sketch always stores and applies gains independently for every motor
+- **Zero All PID Values**: sets the three default PID values to zero before code generation
+
 ### Per-motor configuration
 
 - Driver-specific motor-control pins
@@ -76,7 +82,7 @@ Pins must be non-negative and unique across the complete configuration. Ticks pe
 
 ### Runtime PID values
 
-The generated sketch starts with default PID gains of:
+The generated sketch starts with the PID gains entered in the PID Configuration section. The default values are:
 
 ```text
 Kp = 0.2
