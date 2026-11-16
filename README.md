@@ -5,6 +5,14 @@ A desktop Tkinter application that generates ready-to-upload Arduino C++ code fo
 ## Index
 
 - [What It Does](#what-it-does)
+- [Why This Exists](#why-this-exists)
+- [Use Cases and Test Workflows](#use-cases-and-test-workflows)
+	- [Pinout and Motor-Direction Testing](#pinout-and-motor-direction-testing)
+	- [Encoder Wiring and Direction Testing](#encoder-wiring-and-direction-testing)
+	- [Encoder-Only Testing](#encoder-only-testing)
+	- [Encoder Ticks-Per-Revolution Measurement](#encoder-ticks-per-revolution-measurement)
+	- [PID Tuning and Speed-Response Testing](#pid-tuning-and-speed-response-testing)
+	- [Multi-Motor Isolation and Configuration Testing](#multi-motor-isolation-and-configuration-testing)
 - [Supported Motor Drivers](#supported-motor-drivers)
 - [Supported Microcontrollers](#supported-microcontrollers)
 - [Configurable Values](#configurable-values)
@@ -29,6 +37,152 @@ A desktop Tkinter application that generates ready-to-upload Arduino C++ code fo
 - Supports encoder reset and live encoder-count streaming over Serial.
 - Lets you copy generated code to the clipboard or save it directly as an `.ino` file.
 - Lets you save and load complete hardware and motor pinout configurations as human-readable JSON files from the **File** menu.
+
+## Why This Exists
+
+Motor and encoder bring-up required repeating the same tests regularly. Each time, we had to search through old sketches or write a new one for pinout checks, encoder measurements, and PID tuning. That made testing slower and made it easy for different team members or test sessions to use inconsistent code.
+
+This application provides one reusable workflow that generates stable and uniform code for each test case. Hardware settings, motor mappings, encoder checks, manual tests, and PID configurations can be recreated consistently instead of being rebuilt from scratch every time.
+
+## Use Cases and Test Workflows
+
+The generated sketch can be used as a bring-up and diagnostic tool before running a full robot application. Use a serial monitor at **115200 baud** and send each command followed by a newline. Test one motor at a time, keep the motor unloaded when possible, and be ready to remove power if wiring behaves unexpectedly.
+
+### Use-Case Command Formats
+
+These are the command formats used throughout the workflows below. Replace `<n>` with a one-based motor number:
+
+| Command format | Purpose |
+| --- | --- |
+| `mode manual` | Enable direct timed PWM commands |
+| `mode pid` | Enable closed-loop PID control |
+| `set <n> <pwm> <time_ms>` | Run motor `<n>` at signed PWM for a limited time |
+| `target <n> <rpm>` | Set the target RPM for motor `<n>` |
+| `motor <n> <kp> <ki> <kd>` | Set PID gains for motor `<n>` |
+| `encoder <n>` | Stream encoder counts for motor `<n>` |
+| `reset <n>` | Reset one encoder |
+| `reset all` | Reset every encoder |
+| `stop` | Stop encoder streaming |
+
+PWM values are signed for direction. The configured PWM hard limit still applies. Commands are newline-terminated, and motor numbers start at `1`.
+
+### Pinout and Motor-Direction Testing
+
+Use manual mode to verify that each motor driver's PWM and direction pins are connected to the expected motor and that positive and negative commands produce the intended directions.
+
+1. Enter the correct driver pins for every motor. Set unused motor-control pins to `-1`.
+2. Generate, compile, and upload the sketch.
+3. Switch to manual mode:
+
+	```text
+	mode manual
+	```
+
+4. Test one motor at a low PWM value:
+
+	```text
+	set 1 100 2000
+	set 1 -100 2000
+	```
+
+5. Confirm that motor 1 moves for two seconds in each direction. Repeat for each motor by changing the motor number.
+6. If a motor moves in the wrong direction, swap the motor leads, invert the direction wiring or logic as appropriate for the driver, and repeat the test.
+
+For a single-motor test, set the other motors' output pins to `-1`. The generated code skips `pinMode`, `digitalWrite`, and `analogWrite` for disabled `-1` motor pins.
+
+### Encoder Wiring and Direction Testing
+
+Use encoder streaming to verify that both encoder channels are connected and that quadrature direction is reported correctly.
+
+1. Upload a sketch with valid `Encoder A`, `Encoder B`, and `Ticks/Rev` values. Motor output pins may all be `-1`.
+2. Reset the selected encoder and begin streaming:
+
+	```text
+	reset 1
+	encoder 1
+	```
+
+3. Rotate the shaft slowly in the expected forward direction and observe the `Encoder: <count>` values.
+4. Rotate it in reverse. Counts should change in the opposite direction.
+5. If counts do not change, check power, ground, both encoder channels, pull-ups, and the selected pins. If counts change but the direction is reversed, swap encoder A and B or reverse the direction convention in the robot software.
+6. Stop streaming when finished:
+
+	```text
+	stop
+	```
+
+This also helps detect intermittent wiring, missing quadrature transitions, and encoders connected to the wrong motor index.
+
+### Encoder-Only Testing
+
+The generator supports a safe encoder-only sketch. Set every motor-control pin to `-1`, keep encoder pins valid, and set PID values to zero. The sketch will still initialize, reset, stream, and count encoders without attempting to use an invalid motor pin.
+
+Use:
+
+```text
+reset all
+encoder 1
+# Rotate motor 1 or its encoder shaft.
+stop
+```
+
+This is useful for testing encoders on a workbench, checking encoder direction without motor power, and validating the encoder library and board pin assignments.
+
+### Encoder Ticks-Per-Revolution Measurement
+
+Measure the mechanical ticks per shaft revolution before relying on RPM values. The detailed procedures are in [Measuring Encoder Ticks per Revolution](#measuring-encoder-ticks-per-revolution). The two supported approaches are:
+
+- Rotate the shaft by hand while streaming counts.
+- Run one controlled revolution in manual mode using `set`.
+
+Repeat measurements in both directions and average them when possible. Enter the measured result in that motor's `Ticks/Rev` field and regenerate the sketch.
+
+### PID Tuning and Speed-Response Testing
+
+Use the generated per-motor PID arrays to tune motors independently. Start in manual mode to verify wiring, then switch to PID mode only after the encoder and ticks-per-revolution value are confirmed.
+
+1. Choose a conservative target RPM.
+2. Start with `Ki` and `Kd` at zero and increase `Kp` gradually.
+3. Add a small `Ki` value to correct steady-state error.
+4. Add or adjust `Kd` to reduce overshoot and oscillation.
+5. Test several target speeds and loads, and record the gains that provide stable response.
+
+Example command sequence:
+
+```text
+mode pid
+motor 1 0.1 0 0
+reset 1
+target 1 60
+motor 1 0.2 0.05 0.001
+target 1 120
+```
+
+The GUI's shared PID defaults are convenient for initial multi-motor tests. Uncheck the shared-default option to enter separate gains in each motor row. Runtime `motor <n> ...` commands always update only the selected motor.
+
+### Multi-Motor Isolation and Configuration Testing
+
+The sketch can also verify that motor indices, encoder indices, driver channels, and saved configurations are mapped consistently.
+
+- Run the same low-PWM manual test on each motor and confirm only the requested motor moves.
+- Stream each encoder separately and confirm that the count belongs to the corresponding motor.
+- Use `reset <n>` and `reset all` to verify individual and global encoder reset behavior.
+- Save a known-good configuration, change the GUI values, then load it again to verify configuration restoration.
+- Use `mode manual` and timed `set` commands to check that each motor stops automatically after its requested duration.
+
+Example multi-motor sequence:
+
+```text
+mode manual
+set 1 100 1500
+set 2 100 1500
+set 3 -100 1500
+reset all
+encoder 1
+stop
+encoder 2
+stop
+```
 
 ## Supported Motor Drivers
 
@@ -79,7 +233,7 @@ The generated sketch selects the ESP32 encoder library when compiling for ESP32 
 - Encoder ticks per revolution
 - Per-motor `kP`, `kI`, and `kD` values when shared PID defaults are unchecked
 
-Pins must be non-negative and unique across the complete configuration. Ticks per revolution must be positive.
+Pins must be unique across the complete configuration. Motor-control pins may be set to `-1` to disable motor output for encoder-only testing; encoder pins must be non-negative. Ticks per revolution must be positive.
 
 ### Runtime PID values
 
