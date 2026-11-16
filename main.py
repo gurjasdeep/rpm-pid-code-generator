@@ -50,6 +50,7 @@ class MotorTunerGenerator:
             pid_config,
             text="Use the same PID defaults for all motors (testing)",
             variable=self.separate_pid,
+            command=self.update_pid_field_state,
         ).grid(row=0, column=4, rowspan=2, sticky="w", padx=12)
         ttk.Button(pid_config, text="Zero All PID Values", command=self.zero_pid_values).grid(
             row=2, column=4, sticky="w", padx=12, pady=3
@@ -84,20 +85,38 @@ class MotorTunerGenerator:
         except (ValueError, tk.TclError):
             messagebox.showerror("Invalid input", "Motor count must be between 1 and 16."); return
         names = ["PWM/EN", "IN1", "IN2"] if self.driver.get() == "L298N" else (["PWM_A", "PWM_B"] if self.driver.get() == "BTN8982" else ["PWM", "DIR"])
-        for column, name in enumerate(["Motor", *names, "Encoder A", "Encoder B", "Ticks/Rev"]):
+        field_names = [*names, "ENC_A", "ENC_B", "TICKS", "KP", "KI", "KD"]
+        display_names = ["Motor", *names, "Encoder A", "Encoder B", "Ticks/Rev", "kP", "kI", "kD"]
+        for column, name in enumerate(display_names):
             ttk.Label(self.hardware_frame, text=name, font=("Arial", 9, "bold")).grid(row=0, column=column, padx=5)
         for index in range(number):
             ttk.Label(self.hardware_frame, text=f"Motor {index + 1}").grid(row=index + 1, column=0, padx=5, pady=3)
-            row, defaults = {}, [2 + index * 6 + offset for offset in range(len(names))] + [4 + index * 2, 5 + index * 2, 600]
-            for column, (key, default) in enumerate(zip([*names, "ENC_A", "ENC_B", "TICKS"], defaults), 1):
+            row, defaults = {}, [2 + index * 6 + offset for offset in range(len(names))] + [
+                4 + index * 2, 5 + index * 2, 600, self.default_kp.get(), self.default_ki.get(), self.default_kd.get()
+            ]
+            for column, (key, default) in enumerate(zip(field_names, defaults), 1):
                 entry = ttk.Entry(self.hardware_frame, width=8); entry.grid(row=index + 1, column=column, padx=3)
                 entry.insert(0, old[index].get(key, str(default)) if index < len(old) else str(default)); row[key] = entry
             self.motor_fields.append(row)
+        self.update_pid_field_state()
 
     def zero_pid_values(self):
         self.default_kp.set(0)
         self.default_ki.set(0)
         self.default_kd.set(0)
+        for row in self.motor_fields:
+            for key in ("KP", "KI", "KD"):
+                entry = row[key]
+                entry.configure(state="normal")
+                entry.delete(0, "end")
+                entry.insert(0, "0")
+        self.update_pid_field_state()
+
+    def update_pid_field_state(self):
+        state = "disabled" if self.separate_pid.get() else "normal"
+        for row in self.motor_fields:
+            for key in ("KP", "KI", "KD"):
+                row[key].configure(state=state)
 
     def get_configuration(self):
         return {
@@ -118,7 +137,10 @@ class MotorTunerGenerator:
                 "separate_gains": self.separate_pid.get(),
             },
             "motors": [
-                {key: int(entry.get()) for key, entry in row.items()}
+                {
+                    key: (float(entry.get()) if key in ("KP", "KI", "KD") else int(entry.get()))
+                    for key, entry in row.items()
+                }
                 for row in self.motor_fields
             ],
         }
@@ -196,16 +218,27 @@ class MotorTunerGenerator:
                 raise ValueError("PID field separate_gains must be a boolean.")
             self.separate_pid.set(pid["separate_gains"])
         self.build_motor_fields()
+        for row in self.motor_fields:
+            for key in ("KP", "KI", "KD"):
+                row[key].configure(state="normal")
         expected_keys = set(self.motor_fields[0]) if self.motor_fields else set()
+        legacy_keys = expected_keys - {"KP", "KI", "KD"}
         for index, motor in enumerate(motors):
-            if not isinstance(motor, dict) or set(motor) != expected_keys:
+            if not isinstance(motor, dict) or set(motor) not in (legacy_keys, expected_keys):
                 raise ValueError(f"Motor {index + 1} has invalid pinout fields.")
             for key, entry in self.motor_fields[index].items():
-                value = motor[key]
-                if not isinstance(value, int) or isinstance(value, bool):
+                if key not in motor:
+                    value = {"KP": self.default_kp.get(), "KI": self.default_ki.get(), "KD": self.default_kd.get()}[key]
+                else:
+                    value = motor[key]
+                if key in ("KP", "KI", "KD"):
+                    if not isinstance(value, (int, float)) or isinstance(value, bool):
+                        raise ValueError(f"Motor {index + 1} field {key} must be a number.")
+                elif not isinstance(value, int) or isinstance(value, bool):
                     raise ValueError(f"Motor {index + 1} field {key} must be an integer.")
                 entry.delete(0, "end")
                 entry.insert(0, str(value))
+        self.update_pid_field_state()
 
     def generate(self):
         try:
@@ -215,15 +248,29 @@ class MotorTunerGenerator:
             if not 1 <= bits <= 16 or not 1 <= limit <= 100 or not 1 <= interval <= 1000: raise ValueError("Check PWM and PID values.")
             if kp < 0 or ki < 0 or kd < 0: raise ValueError("PID values must be non-negative.")
             if self.mcu.get() == "Arduino" and bits != 8: raise ValueError("Standard Arduino Uno/Nano uses 8-bit analogWrite. Select 8 bits.")
-            motors = [{key: int(entry.get()) for key, entry in row.items()} for row in self.motor_fields]
-            pin_values = [value for motor in motors for key, value in motor.items() if key != "TICKS"]
+            motors = [{
+                key: (float(entry.get()) if key in ("KP", "KI", "KD") else int(entry.get()))
+                for key, entry in row.items()
+            } for row in self.motor_fields]
+            pid_values = (
+                [(kp, ki, kd)] * count
+                if self.separate_pid.get()
+                else [(motor["KP"], motor["KI"], motor["KD"]) for motor in motors]
+            )
+            if any(value < 0 for values in pid_values for value in values):
+                raise ValueError("PID values must be non-negative.")
+            pin_values = [
+                value for motor in motors
+                for key, value in motor.items()
+                if key not in ("TICKS", "KP", "KI", "KD")
+            ]
             if any(value < 0 for value in pin_values) or len(pin_values) != len(set(pin_values)): raise ValueError("Pins must be non-negative and unique.")
             if any(motor["TICKS"] == 0 for motor in motors): raise ValueError("Ticks per revolution must be positive.")
             self.output.delete("1.0", "end")
-            self.output.insert("1.0", self.generate_cpp(motors, bits, limit, interval, kp, ki, kd))
+            self.output.insert("1.0", self.generate_cpp(motors, bits, limit, interval, kp, ki, kd, pid_values))
         except (ValueError, tk.TclError) as error: messagebox.showerror("Configuration Error", str(error))
 
-    def generate_cpp(self, motors, bits, limit, interval, kp, ki, kd):
+    def generate_cpp(self, motors, bits, limit, interval, kp, ki, kd, pid_values=None):
         driver, mcu, number = self.driver.get(), self.mcu.get(), len(motors)
         max_pwm, hard_limit = (1 << bits) - 1, int(((1 << bits) - 1) * limit / 100)
         constants, encoder_constants, objects, setup_pins, cases = [], [], [], [], []
@@ -248,9 +295,10 @@ class MotorTunerGenerator:
             f"    if (motor == {index}) return encoder{index}.read();"
             for index in range(number)
         ) + "\n    return 0;"
-        default_kp = ", ".join(f"{kp}f" for _ in range(number))
-        default_ki = ", ".join(f"{ki}f" for _ in range(number))
-        default_kd = ", ".join(f"{kd}f" for _ in range(number))
+        pid_values = pid_values or [(kp, ki, kd)] * number
+        default_kp = ", ".join(f"{values[0]}f" for values in pid_values)
+        default_ki = ", ".join(f"{values[1]}f" for values in pid_values)
+        default_kd = ", ".join(f"{values[2]}f" for values in pid_values)
         pid_declarations = (
             f"float kp[NUM_MOTORS] = {{{default_kp}}}, ki[NUM_MOTORS] = {{{default_ki}}}, "
             f"kd[NUM_MOTORS] = {{{default_kd}}};"

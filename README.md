@@ -77,6 +77,7 @@ The generated sketch selects the ESP32 encoder library when compiling for ESP32 
 - Encoder A pin
 - Encoder B pin
 - Encoder ticks per revolution
+- Per-motor `kP`, `kI`, and `kD` values when shared PID defaults are unchecked
 
 Pins must be non-negative and unique across the complete configuration. Ticks per revolution must be positive.
 
