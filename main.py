@@ -30,50 +30,78 @@ class MotorTunerGenerator:
         self.root.config(menu=menu)
 
         main = ttk.Frame(self.root, padding=12)
-        main.pack(fill="both", expand=True)
-        ttk.Label(main, text="MOTOR RPM TUNER", font=("Arial", 20, "bold")).pack(anchor="w", pady=10)
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        main.grid(row=0, column=0, sticky="nsew")
+        main.columnconfigure(0, weight=1)
+        main.rowconfigure(5, weight=1)
+        ttk.Label(main, text="MOTOR RPM TUNER", font=("Arial", 20, "bold")).grid(
+            row=0, column=0, sticky="w", pady=10
+        )
         config = ttk.LabelFrame(main, text="Hardware Configuration", padding=10)
-        config.pack(fill="x", pady=5)
-        self.add_combo(config, "Microcontroller", self.mcu, ["ESP32", "Arduino", "Teensy", "Pico"], 0)
-        self.add_combo(config, "Motor Driver", self.driver, ["BTN8982", "L298N", "MDD20A", "Generic PWM/DIR"], 1)
-        self.add_entry(config, "Number of Motors", self.count, 2)
-        self.add_entry(config, "PWM Resolution (bits)", self.resolution, 3)
-        self.add_entry(config, "PWM Hard Limit (%)", self.pwm_limit, 4)
-        self.add_entry(config, "PID Interval (ms)", self.pid_interval, 5)
-        ttk.Button(config, text="Update Motor Configuration", command=self.build_motor_fields).grid(row=6, column=0, columnspan=4, pady=10)
-        pid_config = ttk.LabelFrame(main, text="PID Configuration", padding=10)
-        pid_config.pack(fill="x", pady=5)
-        self.add_entry(pid_config, "Default kP", self.default_kp, 0)
-        self.add_entry(pid_config, "Default kI", self.default_ki, 1)
-        self.add_entry(pid_config, "Default kD", self.default_kd, 2)
+        config.grid(row=1, column=0, sticky="ew", pady=5)
+
+
+        ttk.Label(config, text="Microcontroller").grid(row=0, column=0, sticky="w", padx=5, pady=3)
+        ttk.Combobox(config, textvariable=self.mcu, values=["ESP32", "Arduino", "Teensy", "Pico"], state="readonly", width=25).grid(row=0, column=1, sticky="w", padx=5, pady=3)
+        ttk.Label(config, text="Motor Driver").grid(row=1, column=0, sticky="w", padx=5, pady=3)
+        ttk.Combobox(config, textvariable=self.driver, values=["BTN8982", "L298N", "MDD20A", "Generic PWM/DIR"], state="readonly", width=25).grid(row=1, column=1, sticky="w", padx=5, pady=3)
+
+
+        ttk.Label(config, text="Number of Motors").grid(row=0, column=2, sticky="w", padx=5, pady=3)
+        ttk.Entry(config, textvariable=self.count, width=4).grid(row=0, column=3, sticky="w", padx=5, pady=3)
+        ttk.Label(config, text="PWM Resolution (bits)").grid(row=1, column=2, sticky="w", padx=5, pady=3)
+        ttk.Entry(config, textvariable=self.resolution, width=4).grid(row=1, column=3, sticky="w", padx=5, pady=3)
+        ttk.Label(config, text="PWM Hard Limit (%)").grid(row=2, column=2, sticky="w", padx=5, pady=3)
+        ttk.Entry(config, textvariable=self.pwm_limit, width=4).grid(row=2, column=3, sticky="w", padx=5, pady=3)
+
+
+        ttk.Button(config, text="Update Motor Configuration", command=self.build_motor_fields).grid(row=4, column=0, columnspan=3, pady=10)
+
+
+
+
+        pid_setting = ttk.Frame(config, padding=0)
+        pid_setting.grid(row = 0, column=4)
+        ttk.Label(pid_setting, text="PID Interval (ms)").grid(row=0, column=0, sticky="w", padx=5, pady=3)
+        ttk.Entry(pid_setting, textvariable=self.pid_interval, width=4).grid(row=0, column=1, sticky="w", padx=5, pady=3)
         ttk.Checkbutton(
-            pid_config,
-            text="Use the same PID defaults for all motors (testing)",
+            config,
+            text="Same PID Constants for all",
             variable=self.separate_pid,
             command=self.update_pid_field_state,
-        ).grid(row=0, column=4, rowspan=2, sticky="w", padx=12)
-        ttk.Button(pid_config, text="Zero All PID Values", command=self.zero_pid_values).grid(
-            row=2, column=4, sticky="w", padx=12, pady=3
+        ).grid(row=1, column=4, rowspan=1, sticky="w", padx=12)
+
+
+        ttk.Button(config, text="Zero out PID values", command=self.zero_pid_values).grid(
+            row=4, column=4, sticky="w", padx=12, pady=0
         )
+
+
+        pid_config = ttk.LabelFrame(main, text="PID Configuration", padding=10)
+        pid_config.grid(row=2, column=0, sticky="ew", pady=5)
+        ttk.Label(pid_config, text="Default kP").grid(row=0, column=2, sticky="w", padx=5, pady=3)
+        ttk.Entry(pid_config, textvariable=self.default_kp, width=12).grid(row=0, column=3, sticky="w", padx=5, pady=3)
+        ttk.Label(pid_config, text="Default kI").grid(row=1, column=2, sticky="w", padx=5, pady=3)
+        ttk.Entry(pid_config, textvariable=self.default_ki, width=12).grid(row=1, column=3, sticky="w", padx=5, pady=3)
+        ttk.Label(pid_config, text="Default kD").grid(row=2, column=2, sticky="w", padx=5, pady=3)
+        ttk.Entry(pid_config, textvariable=self.default_kd, width=12).grid(row=2, column=3, sticky="w", padx=5, pady=3)
+
+
         self.hardware_frame = ttk.LabelFrame(main, text="Individual Motor Configuration", padding=10)
-        self.hardware_frame.pack(fill="x", pady=8)
+        self.hardware_frame.grid(row=3, column=0, sticky="ew", pady=8)
         self.build_motor_fields()
         controls = ttk.Frame(main)
-        controls.pack(fill="x", pady=8)
-        for label, command in [("Generate C++ Code", self.generate), ("Copy Code", self.copy_code), ("Save .ino", self.save_ino), ("Clear", lambda: self.output.delete("1.0", "end"))]:
-            ttk.Button(controls, text=label, command=command).pack(side="left", padx=5)
+        controls.grid(row=4, column=0, sticky="ew", pady=8)
+        for column, (label, command) in enumerate([
+            ("Generate C++ Code", self.generate),
+            ("Copy Code", self.copy_code),
+            ("Save .ino", self.save_ino),
+            ("Clear", lambda: self.output.delete("1.0", "end")),
+        ]):
+            ttk.Button(controls, text=label, command=command).grid(row=0, column=column, padx=5)
         self.output = tk.Text(main, font=("Consolas", 10), wrap="none", undo=True)
-        self.output.pack(fill="both", expand=True)
-
-    @staticmethod
-    def add_combo(parent, label, variable, values, row):
-        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=5, pady=3)
-        ttk.Combobox(parent, textvariable=variable, values=values, state="readonly", width=25).grid(row=row, column=1, sticky="w", padx=5, pady=3)
-
-    @staticmethod
-    def add_entry(parent, label, variable, row):
-        ttk.Label(parent, text=label).grid(row=row, column=2, sticky="w", padx=5, pady=3)
-        ttk.Entry(parent, textvariable=variable, width=12).grid(row=row, column=3, sticky="w", padx=5, pady=3)
+        self.output.grid(row=5, column=0, sticky="nsew")
 
     def build_motor_fields(self):
         old = [{key: entry.get() for key, entry in row.items()} for row in self.motor_fields]
@@ -117,6 +145,7 @@ class MotorTunerGenerator:
         for row in self.motor_fields:
             for key in ("KP", "KI", "KD"):
                 row[key].configure(state=state)
+
 
     def get_configuration(self):
         return {
