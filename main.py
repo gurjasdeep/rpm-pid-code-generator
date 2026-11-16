@@ -310,7 +310,13 @@ class MotorTunerGenerator:
                 for key, value in motor.items()
                 if key not in ("TICKS", "KP", "KI", "KD")
             ]
-            if any(value < 0 for value in pin_values) or len(pin_values) != len(set(pin_values)): raise ValueError("Pins must be non-negative and unique.")
+            if any(value < -1 for value in pin_values):
+                raise ValueError("Pins must be -1 or non-negative.")
+            if any(motor["ENC_A"] < 0 or motor["ENC_B"] < 0 for motor in motors):
+                raise ValueError("Encoder pins must be non-negative.")
+            used_pins = [value for value in pin_values if value != -1]
+            if len(used_pins) != len(set(used_pins)):
+                raise ValueError("Pins must be unique.")
             if any(motor["TICKS"] == 0 for motor in motors): raise ValueError("Ticks per revolution must be positive.")
             self.output.delete("1.0", "end")
             self.output.insert("1.0", self.generate_cpp(motors, bits, limit, interval, kp, ki, kd, pid_values))
@@ -323,16 +329,36 @@ class MotorTunerGenerator:
         for index, motor in enumerate(motors):
             if driver == "L298N":
                 constants.append(f"const int PWM_{index}={motor['PWM/EN']}, IN1_{index}={motor['IN1']}, IN2_{index}={motor['IN2']};")
-                setup_pins.append(f"pinMode(PWM_{index},OUTPUT); pinMode(IN1_{index},OUTPUT); pinMode(IN2_{index},OUTPUT);")
-                cases.append(f"case {index}: digitalWrite(IN1_{index},value>=0); digitalWrite(IN2_{index},value<0); writePWM(PWM_{index},abs(value)); break;")
+                setup_pins.append(
+                    f"if(PWM_{index}>=0)pinMode(PWM_{index},OUTPUT); "
+                    f"if(IN1_{index}>=0)pinMode(IN1_{index},OUTPUT); "
+                    f"if(IN2_{index}>=0)pinMode(IN2_{index},OUTPUT);"
+                )
+                cases.append(
+                    f"case {index}: if(IN1_{index}>=0)digitalWrite(IN1_{index},value>=0); "
+                    f"if(IN2_{index}>=0)digitalWrite(IN2_{index},value<0); "
+                    f"if(PWM_{index}>=0)writePWM(PWM_{index},abs(value)); break;"
+                )
             elif driver == "BTN8982":
                 constants.append(f"const int PWM_A_{index}={motor['PWM_A']}, PWM_B_{index}={motor['PWM_B']};")
-                setup_pins.append(f"pinMode(PWM_A_{index},OUTPUT); pinMode(PWM_B_{index},OUTPUT);")
-                cases.append(f"case {index}: writePWM(PWM_A_{index},value>0?value:0); writePWM(PWM_B_{index},value<0?-value:0); break;")
+                setup_pins.append(
+                    f"if(PWM_A_{index}>=0)pinMode(PWM_A_{index},OUTPUT); "
+                    f"if(PWM_B_{index}>=0)pinMode(PWM_B_{index},OUTPUT);"
+                )
+                cases.append(
+                    f"case {index}: if(PWM_A_{index}>=0)writePWM(PWM_A_{index},value>0?value:0); "
+                    f"if(PWM_B_{index}>=0)writePWM(PWM_B_{index},value<0?-value:0); break;"
+                )
             else:
                 constants.append(f"const int PWM_{index}={motor['PWM']}, DIR_{index}={motor['DIR']};")
-                setup_pins.append(f"pinMode(PWM_{index},OUTPUT); pinMode(DIR_{index},OUTPUT);")
-                cases.append(f"case {index}: digitalWrite(DIR_{index},value<0); writePWM(PWM_{index},abs(value)); break;")
+                setup_pins.append(
+                    f"if(PWM_{index}>=0)pinMode(PWM_{index},OUTPUT); "
+                    f"if(DIR_{index}>=0)pinMode(DIR_{index},OUTPUT);"
+                )
+                cases.append(
+                    f"case {index}: if(DIR_{index}>=0)digitalWrite(DIR_{index},value<0); "
+                    f"if(PWM_{index}>=0)writePWM(PWM_{index},abs(value)); break;"
+                )
             encoder_constants.append(f"const int ENC_A_{index}={motor['ENC_A']}, ENC_B_{index}={motor['ENC_B']};")
             objects.append(f"Encoder encoder{index}(ENC_A_{index},ENC_B_{index});")
         ticks = ", ".join(str(motor["TICKS"]) for motor in motors)
