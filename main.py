@@ -19,6 +19,8 @@ class MotorTunerGenerator:
         self.default_kd = tk.DoubleVar(value=0.001)
         self.separate_pid = tk.BooleanVar(value=True)
         self.motor_fields = []
+        self.pid_header_widgets = []
+        self.pid_widgets = []
         self.create_ui()
 
     def create_ui(self):
@@ -39,7 +41,7 @@ class MotorTunerGenerator:
             row=0, column=0, sticky="w", pady=10
         )
         config = ttk.LabelFrame(main, text="Hardware Configuration", padding=10)
-        config.grid(row=1, column=0, sticky="ew", pady=5)
+        config.grid(row=1, column=0, sticky="ew", pady=5, columnspan=2)
 
 
         ttk.Label(config, text="Microcontroller").grid(row=0, column=0, sticky="w", padx=5, pady=3)
@@ -69,7 +71,7 @@ class MotorTunerGenerator:
             config,
             text="Same PID Constants for all",
             variable=self.separate_pid,
-            command=self.update_pid_field_state,
+            command=self.update_pid_visibility,
         ).grid(row=1, column=4, rowspan=1, sticky="w", padx=12)
 
 
@@ -78,18 +80,18 @@ class MotorTunerGenerator:
         )
 
 
-        pid_config = ttk.LabelFrame(main, text="PID Configuration", padding=10)
-        pid_config.grid(row=2, column=0, sticky="ew", pady=5)
-        ttk.Label(pid_config, text="Default kP").grid(row=0, column=2, sticky="w", padx=5, pady=3)
-        ttk.Entry(pid_config, textvariable=self.default_kp, width=12).grid(row=0, column=3, sticky="w", padx=5, pady=3)
-        ttk.Label(pid_config, text="Default kI").grid(row=1, column=2, sticky="w", padx=5, pady=3)
-        ttk.Entry(pid_config, textvariable=self.default_ki, width=12).grid(row=1, column=3, sticky="w", padx=5, pady=3)
-        ttk.Label(pid_config, text="Default kD").grid(row=2, column=2, sticky="w", padx=5, pady=3)
-        ttk.Entry(pid_config, textvariable=self.default_kd, width=12).grid(row=2, column=3, sticky="w", padx=5, pady=3)
+        self.pid_config = ttk.LabelFrame(main, text="PID Configuration", padding=10)
+        self.pid_config.grid(row=2, column=1, sticky="new", pady=5, padx=10)
+        ttk.Label(self.pid_config, text="Default kP").grid(row=0, column=2, sticky="w", padx=5, pady=3)
+        ttk.Entry(self.pid_config, textvariable=self.default_kp, width=12).grid(row=0, column=3, sticky="w", padx=5, pady=3)
+        ttk.Label(self.pid_config, text="Default kI").grid(row=1, column=2, sticky="w", padx=5, pady=3)
+        ttk.Entry(self.pid_config, textvariable=self.default_ki, width=12).grid(row=1, column=3, sticky="w", padx=5, pady=3)
+        ttk.Label(self.pid_config, text="Default kD").grid(row=2, column=2, sticky="w", padx=5, pady=3)
+        ttk.Entry(self.pid_config, textvariable=self.default_kd, width=12).grid(row=2, column=3, sticky="w", padx=5, pady=3)
 
 
         self.hardware_frame = ttk.LabelFrame(main, text="Individual Motor Configuration", padding=10)
-        self.hardware_frame.grid(row=3, column=0, sticky="ew", pady=8)
+        self.hardware_frame.grid(row=2, column=0, sticky="ew", pady=8)
         self.build_motor_fields()
         controls = ttk.Frame(main)
         controls.grid(row=4, column=0, sticky="ew", pady=8)
@@ -115,18 +117,27 @@ class MotorTunerGenerator:
         names = ["PWM/EN", "IN1", "IN2"] if self.driver.get() == "L298N" else (["PWM_A", "PWM_B"] if self.driver.get() == "BTN8982" else ["PWM", "DIR"])
         field_names = [*names, "ENC_A", "ENC_B", "TICKS", "KP", "KI", "KD"]
         display_names = ["Motor", *names, "Encoder A", "Encoder B", "Ticks/Rev", "kP", "kI", "kD"]
+        self.pid_header_widgets = []
+        self.pid_widgets = []
         for column, name in enumerate(display_names):
-            ttk.Label(self.hardware_frame, text=name, font=("Arial", 9, "bold")).grid(row=0, column=column, padx=5)
+            header = ttk.Label(self.hardware_frame, text=name, font=("Arial", 9, "bold"))
+            header.grid(row=0, column=column, padx=5)
+            if name in ("kP", "kI", "kD"):
+                self.pid_header_widgets.append(header)
         for index in range(number):
             ttk.Label(self.hardware_frame, text=f"Motor {index + 1}").grid(row=index + 1, column=0, padx=5, pady=3)
             row, defaults = {}, [2 + index * 6 + offset for offset in range(len(names))] + [
                 4 + index * 2, 5 + index * 2, 600, self.default_kp.get(), self.default_ki.get(), self.default_kd.get()
             ]
+            motor_pid_widgets = []
             for column, (key, default) in enumerate(zip(field_names, defaults), 1):
                 entry = ttk.Entry(self.hardware_frame, width=8); entry.grid(row=index + 1, column=column, padx=3)
                 entry.insert(0, old[index].get(key, str(default)) if index < len(old) else str(default)); row[key] = entry
+                if key in ("KP", "KI", "KD"):
+                    motor_pid_widgets.append(entry)
             self.motor_fields.append(row)
-        self.update_pid_field_state()
+            self.pid_widgets.append(motor_pid_widgets)
+        self.update_pid_visibility()
 
     def zero_pid_values(self):
         self.default_kp.set(0)
@@ -135,16 +146,22 @@ class MotorTunerGenerator:
         for row in self.motor_fields:
             for key in ("KP", "KI", "KD"):
                 entry = row[key]
-                entry.configure(state="normal")
                 entry.delete(0, "end")
                 entry.insert(0, "0")
-        self.update_pid_field_state()
+        self.update_pid_visibility()
 
-    def update_pid_field_state(self):
-        state = "disabled" if self.separate_pid.get() else "normal"
-        for row in self.motor_fields:
-            for key in ("KP", "KI", "KD"):
-                row[key].configure(state=state)
+    def update_pid_visibility(self):
+        if self.separate_pid.get():
+            self.pid_config.grid(row=2, column=1, sticky="new", pady=5, padx=10)
+            motor_pid_visible = False
+        else:
+            self.pid_config.grid_remove()
+            motor_pid_visible = True
+        for widget in self.pid_header_widgets:
+            (widget.grid if motor_pid_visible else widget.grid_remove)()
+        for motor_pid_widgets in self.pid_widgets:
+            for widget in motor_pid_widgets:
+                (widget.grid if motor_pid_visible else widget.grid_remove)()
 
 
     def get_configuration(self):
@@ -267,7 +284,7 @@ class MotorTunerGenerator:
                     raise ValueError(f"Motor {index + 1} field {key} must be an integer.")
                 entry.delete(0, "end")
                 entry.insert(0, str(value))
-        self.update_pid_field_state()
+        self.update_pid_visibility()
 
     def generate(self):
         try:
